@@ -11,7 +11,7 @@ MASTER_PORT=12345
 
 run_name=DIVA_for_OpenAICLIP
 num_steps=4600
-python -m torch.distributed.launch --nproc_per_node=8 --nnodes=1 --node_rank=0 \
+python -m torch.distributed.launch --nproc_per_node=1 --nnodes=1 --node_rank=0 \
 	--master_addr=${MASTER_ADDR} --master_port=${MASTER_PORT} --use_env \
     run_DIVA_with_OpenAICLIP.py \
     --clip_image_size 224 \
@@ -26,14 +26,13 @@ python -m torch.distributed.launch --nproc_per_node=8 --nnodes=1 --node_rank=0 \
     --ddp_find_unused_parameters True \
     --dataloader_num_workers 8 \
     --learning_rate 1e-4 \
-    --bf16 True \
-    --tf32 True \
+    --fp16 True \
     --warmup_ratio 0.005 \
     --weight_decay 0 \
     --max_steps $num_steps \
     --per_device_train_batch_size 16 \
     --logging_strategy steps \
-    --logging_steps 50 \
+    --logging_steps 1 \
     --gradient_accumulation_steps 5 \
     --save_strategy steps \
     --save_steps $num_steps \

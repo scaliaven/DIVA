@@ -10,6 +10,7 @@ from .build import load_sd_model, load_clip_model_OpenAICLIP
 from .utils import initiate_time_steps, prepare_class_text_embeddings
 import torchvision.transforms as transforms
 import clip
+from transformers.trainer import logger
 
 
 @dataclass
@@ -36,7 +37,7 @@ class SDModel(PreTrainedModel):
         self.config = config
         discrimi_size = self.config.clip_image_size
         self.resize_transform_discrimi = transforms.Resize((discrimi_size, discrimi_size))
-        self.visual_proj = nn.Linear(768, 1024)
+        self.visual_proj = nn.Linear(256, 1024)
 
     def classify(self, image, classes):
 
@@ -85,12 +86,17 @@ class SDModel(PreTrainedModel):
                 texts = [template.format(classname) for template in templates]
                 texts = clip.tokenize(texts, truncate=True).cuda()
                 class_embeddings = model.encode_text(texts)
+                class_embeddings = torch.mean(class_embeddings, dim=1)
+                # logger.info(f"Class embeddings shape: {class_embeddings.shape}") # [1, 77, 256], [1, 768]
                 class_embeddings /= class_embeddings.norm(dim=-1, keepdim=True)
+                # logger.info(f"Class embeddings shape: {class_embeddings.shape}") # [1, 77, 256], [1, 768]
                 class_embedding = class_embeddings.mean(dim=0)
+                # logger.info(f"Class embedding shape: {class_embedding.shape}") # [77, 256], ori:[768]
                 class_embedding /= class_embedding.norm()
+                # logger.info(f"Class embedding shape: {class_embedding.shape}") # [77, 256], ori:[768]
                 zeroshot_weights.append(class_embedding)
             zeroshot_weights = torch.stack(zeroshot_weights, dim=1).cuda()
-        return zeroshot_weights
+        return zeroshot_weights # [77, 1, 256], ori:[768, 1]
 
     def forward(
         self,
@@ -160,7 +166,7 @@ class SDModel(PreTrainedModel):
             probs = probs.unsqueeze(1).repeat(1,self.config.input.batch_size,1,1,1).reshape(-1,word_num,1,1)
             context = (probs * class_text_embeddings).sum(1)
             image_features = self.visual_proj(image_features)
-            context = context + image_features
+            context = torch.cat([context, image_features], dim=1)
 
             # Predict noise with the diffusion model
             pred_noise = self._unet_pred_noise(x_start=latent, t=timesteps, noise=noise, context=context).float()

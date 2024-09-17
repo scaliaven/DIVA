@@ -14,6 +14,8 @@ import torchvision
 from torch.utils.data import Dataset
 from datasets import load_dataset
 from torchvision import transforms
+import blobfile as bf
+from transformers.trainer import logger
 
 from .constants import ASPECT_RATIO_256, ASPECT_RATIO_512, ASPECT_RATIO_1024, DEFAULT_IMAGE_FILE_SUFFIX
 from .transform import image_transform, image_transform_original_resolution, image_transform_original_resolution_test
@@ -54,6 +56,156 @@ def get_cc3m_wds_dataset_and_collator(data_args, model_args):
         remove_columns=['__key__', '__url__']
     )
     data = data.filter(lambda sample: 'image' in sample and 'text' in sample) # filter return samples that match the given condition
+    data_collator = CC3M_WebdatasetCollator(model_args.patch_size)
+
+    return data, data_collator
+
+def get_flickr8k_wds_dataset_and_collator(data_args, model_args):
+    img_size = model_args.image_size
+    from transformers import CLIPProcessor
+    processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
+    img_processor = processor.image_processor
+    train_processor = image_transform(img_size, is_train=True)
+    val_processor = image_transform(img_size, is_train=False)
+
+    data = load_dataset(path="jxie/flickr8k", split="train")
+    data = data.shuffle(seed=data_args.seed)
+
+    def decode(sample):
+        sample = find_image(sample)
+        sample['image'] = img_processor(sample['image'])['pixel_values'][0]
+        sample['text'] = sample['caption_0']
+        return sample
+    data = data.map(
+        decode,
+        remove_columns=['caption_0', 'caption_1', 'caption_2', 'caption_3', 'caption_4'], num_proc=16,
+    )
+    data.set_format(type="torch", columns=['image', 'text'])
+    # data = data.filter(lambda sample: 'image' in sample and 'text' in sample) # filter return samples that match the given condition
+    data_collator = CC3M_WebdatasetCollator(model_args.patch_size)
+
+    return data, data_collator
+
+class ImageDataset(Dataset):
+    def __init__(
+        self, resolution, image_paths, 
+        shard=0, num_shards=1, random_crop=False, random_flip=True,
+        img_processor=None,
+        max_seq=None
+    ):
+        super().__init__()
+        self.resolution = resolution
+        local_images_len = len(image_paths) // num_shards  #added by me
+        self.local_images = image_paths[shard:][::num_shards][:local_images_len]  #added by me
+        self.random_crop = random_crop
+        self.random_flip = random_flip
+        # self.tokenizer = tokenizer
+        self.img_processor = img_processor
+        # self.img_token_len = img_token_len
+        self.max_seq = max_seq
+
+    def __len__(self):
+        return len(self.local_images)  # return 1000
+
+    def __getitem__(self, idx):
+
+        def tokenize_text(text):
+
+            # list_masks = [0] * (self.img_token_len+1)
+            # list_masks = list_masks[:max_seq]
+            cur_text = text.lower().strip()
+            # list_tokens = self.tokenizer(cur_text, add_special_tokens=True)['input_ids']
+            # list_tokens = tokenizer(text.lower().strip())['input_ids']
+            # list_tokens = list_tokens[:self.max_seq]
+
+            # padding to fixed length: max_seq
+            # token_padding = [self.tokenizer.pad_token_id] * (self.max_seq - len(list_tokens))
+            # mask_padding = [1] * (self.max_seq - 1)
+            # list_tokens.extend(token_padding)
+            # list_masks.extend(mask_padding)
+
+            return cur_text
+
+        path = self.local_images[idx]
+        img_path, text_path = path
+        # # TODO: if use original caption
+        # ori_path = text_path.replace('.txt', '_ori.txt')
+        # if os.path.exists(ori_path):
+        #     text_path = ori_path
+        #
+        # print(img_path)
+        with open(text_path, 'r') as f:
+            text = f.readlines()[0].strip()
+        list_tokens = tokenize_text(text)
+        
+        with bf.BlobFile(img_path, "rb") as f:
+            pil_image = Image.open(f)
+            pil_image.load()
+        pil_image = pil_image.convert("RGB")
+        pixel_values = self.img_processor(pil_image)['pixel_values'][0]
+        # trans = transforms.Compose([
+        #     transforms.Resize((224,224)),
+        #     transforms.ToTensor()
+        # ])
+        # image_t = trans(pil_image)
+
+        return {
+            'image' : torch.tensor(pixel_values), 
+            # 'image_t' : image_t,
+            'text' : list_tokens,
+            # 'input_mask_0' : torch.tensor(list_masks),
+            # 'img_path': img_path
+        }
+
+def _list_image_files_recursively(data_dir):
+    results = []
+    for entry in sorted(bf.listdir(data_dir)):
+        full_path = bf.join(data_dir, entry)
+        ext = entry.split(".")[-1]
+        if "." in entry and ext.lower() in ["jpg", "jpeg", "png", "gif"]:
+            results.append(full_path)
+        elif bf.isdir(full_path):
+            results.extend(_list_image_files_recursively(full_path))
+    return results
+
+def get_custom_wds_dataset_and_collator(data_args, model_args):
+    img_size = model_args.image_size
+    from transformers import CLIPProcessor
+    processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
+    img_processor = processor.image_processor
+    train_processor = image_transform(img_size, is_train=True)
+    val_processor = image_transform(img_size, is_train=False)
+
+    # data = load_dataset(path="/scratch/hh3043/bi-diffusion/laion-220k", split="train")
+    # data = data.shuffle(seed=data_args.seed)
+    data_path = "/vast/hh3043/bi-diffusion/laion-220k/test"
+    logger.info("start loading data")
+    all_files = _list_image_files_recursively(data_path)
+    text_files = [item.replace('jpg', 'txt') for item in all_files]
+    all_files = list(zip(all_files, text_files))
+    logger.info("finished loading data")
+    # if data_num != -1 and data_num is not None:
+    #     random.seed(42)
+    #     random.shuffle(all_files)
+    #     all_files = all_files[:min(len(all_files), data_num)]
+
+    # if data_id != -1 and num_data_batch != -1:
+    #     # load data seperated 
+    #     # seperate datafile into num_data_batch groups
+    #     # currently only loading group data_id
+    #     group_len = len(all_files) // num_data_batch + 1
+    #     all_files = all_files[data_id * group_len: min((data_id + 1) * group_len, len(all_files))]
+
+    if len(all_files) == 0:
+        return None
+
+    
+    data = ImageDataset(img_size, all_files,
+        num_shards=1, random_crop=False, random_flip=False,
+        img_processor=img_processor,
+        max_seq=77,
+    )
+    # data = data.filter(lambda sample: 'image' in sample and 'text' in sample) # filter return samples that match the given condition
     data_collator = CC3M_WebdatasetCollator(model_args.patch_size)
 
     return data, data_collator

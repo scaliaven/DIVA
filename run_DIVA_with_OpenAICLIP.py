@@ -54,14 +54,25 @@ def setup_for_distributed(is_master):
     builtins.print = print
 
 
-def setup_wandb_env(wandb_api_key=None):
+def setup_wandb_env(wandb_api_key="29f3e354224c3a01904593b9f5b24a2793ed644f"):
     os.environ["WANDB_API_KEY"] = wandb_api_key or ''
-    os.environ["WANDB_MODE"] = "offline"
+    os.environ["WANDB_MODE"] = "online"
     os.environ["WANDB__SERVICE_WAIT"] = "300"
     os.environ["WANDB_CONFIG_DIR"] = "./wandb"
 
 
 def main():
+    # from huggingface_hub import snapshot_download
+
+    # # Download the entire repository directory to a local folder
+    # local_dir = snapshot_download(
+    #     repo_id="MMVP/MMVP_VLM",    # Replace with your model/dataset repo ID
+    #     repo_type = "dataset",      # Replace with "model" if you are downloading a model
+    #     local_dir="/scratch/hh3043/DIVA/datasets",   # Local directory to save the repo
+    # )
+
+    # print(f"Repository downloaded to: {local_dir}")
+
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
@@ -132,8 +143,8 @@ def main():
     logger.info(f"{str(model)}")
     model.cuda()
 
-    from data import get_cc3m_wds_dataset_and_collator
-    wds_dataset, wds_collator = get_cc3m_wds_dataset_and_collator(data_args, model_args)
+    from data import get_cc3m_wds_dataset_and_collator, get_flickr8k_wds_dataset_and_collator, get_custom_wds_dataset_and_collator
+    wds_dataset, wds_collator = get_custom_wds_dataset_and_collator(data_args, model_args)
 
     if config.model.freeze_class_embeds:
         params = []

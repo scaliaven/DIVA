@@ -7,6 +7,65 @@ import numpy as np
 from PIL import Image
 from omegaconf import OmegaConf, open_dict
 
+from transformers import AutoConfig
+# from transformers import BertEncoder
+from transformers.models.bert.modeling_bert import BertEncoder, BertModel
+
+import torch as th
+import torch.nn as nn
+import torch.nn.functional as F
+from transformers.trainer import logger
+
+
+class CombinedModel(nn.Module):
+    def __init__(self, clip_model, text_encoder):
+        """
+        Args:
+            base_model: The pre-trained model (e.g., a vision model).
+            text_encoder: A text encoding model (e.g., transformer, BERT, etc.).
+        """
+        super(CombinedModel, self).__init__()
+        
+        # Assign the pre-trained model and text encoder
+        self.clip_model = clip_model
+        self.text_encoder = text_encoder
+
+        mlp_depth = 2
+        modules = [nn.Linear(1024, 256)]
+        for _ in range(1, mlp_depth):
+            modules.append(nn.GELU())
+            modules.append(nn.Linear(256, 256))
+        self.img_proj = nn.Sequential(*modules)
+
+    def encode_image(self, image_input):
+        image_output = self.clip_model(image_input).last_hidden_state.float()
+        image_output = self.img_proj(image_output)
+
+        return image_output
+
+    def encode_text(self, text_input):
+        return self.text_encoder(text_input)
+
+    def forward(self, image_input, text_input=None):
+        """
+        Forward pass of the model.
+        Args:
+            image_input: Input image tensor (for the base model).
+            text_input: Optional input text tensor (for the text encoder).
+        Returns:
+            Combined or separate output from the base model and text encoder.
+        """
+        # Pass the image input through the base model (vision model)
+        image_output = self.clip_model(image_input).last_hidden_state.float()
+        image_output = self.img_proj(image_output[:,0,:])
+        
+        # If text input is provided, pass it through the text encoder
+        if text_input is not None:
+            text_output = self.text_encoder(text_input)
+            return image_output, torch.mean(text_output, dim=1)
+        
+        return image_output  # Only return image output if no text is provided
+
 
 class UnNormalize(object):
     """Unformalize image as: image = (image * std) + mean

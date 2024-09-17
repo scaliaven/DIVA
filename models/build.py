@@ -48,7 +48,7 @@ def load_sd_model(config):
             )
     elif config.model.sd_version == '2-1':
         
-        model_id = "pretrained_weights/SD/stable-diffusion-2-1-base"
+        model_id = "stabilityai/stable-diffusion-2-1-base"
         print(f'model_id:{model_id}')
         
         scheduler = EulerDiscreteScheduler.from_pretrained(model_id, subfolder="scheduler")
